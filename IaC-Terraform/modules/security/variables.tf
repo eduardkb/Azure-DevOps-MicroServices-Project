@@ -40,25 +40,25 @@ variable "random_web_key" {
 variable "imported_keyvault" {
   description = "Existing Keyvault to import secrets"
   type        = string
-  default     = "kv-eduard-ussc"
+  default     = "ekb-SharedKeyVault"
 }
 
 variable "imported_resource_group" {
   description = "Existing RG to import resources"
   type        = string
-  default     = "rg-Eduard"
+  default     = "SharedResources"
 }
 
 variable "AppReg_ApiClientID" {
   description = "Audience to be used while verifying authentication token on API"
   type = string
-  default = "378c023f-5e3e-405b-84af-89b7334ebcde"
+  default = "989ce838-38af-4bf6-8cef-762ae61ef95a"
 }
 
 variable "AppReg_WebClientID" {
   description = "Audience to be used while verifying authentication token on API"
   type = string
-  default = "ae470f08-1305-4ea7-be0e-727c2ac062b0"
+  default = "4f4234aa-6410-4251-9786-0d2fea0d2f3d"
 }
 
 # COMPUTE VARIABLES

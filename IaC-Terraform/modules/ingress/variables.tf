@@ -34,13 +34,13 @@ variable "imported_resource_group" {
 variable "imported_dns_zone_name" {
   description = "Imported dns zone to configure A Record pointing to App Gateway"
   type        = string
-  default     = "ekb.xom.cloud"
+  default     = "edukb.site"
 }
 
 variable "dns_zone_prefix" {
   description = "Dns zone prefix to be used (ex: www or app). If APEX, put '@'"
   type        = string
-  default     = "@"
+  default     = "www"
 }
 
 # SECURITY VARIABLES

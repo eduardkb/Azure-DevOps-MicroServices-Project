@@ -8,7 +8,7 @@
 
 ## DNS Zone
 - A pre-configured public dns zone is necessary with its SSL certificate for DNS Zone and Key Vault step below
-- modify the name of the Public DNS Zone on file `./IaC-terraform/modules/ingress/variables.tf` variable `imported_dns_zone_name`
+- modify the name of the Public DNS Zone on file `./IaC-terraform/modules/ingress/variables.tf` variable `imported_dns_zone_name`. Also modify variable `imported_resource_group` to inform where this resource is located.
 - modify the prefix name (variable `dns_zone_prefix` on file above). Ex: www or app. If APEX, put '@'.
 - Make sure on the recordsets of this DNS Zone there is no record with the prefix name above. It will be created.
 
@@ -24,7 +24,7 @@
   - name it "appGateway-sslPfxCert" 
 - Certificate Password
   - you don't need to create the password as a secret on keyvault. app gateway can read the certificate fom kv withou passing the password.
-- Configure this key vault's name on the terraform file `./IaC-terraform/modules/security/variables.tf` variable `imported_keyvault`
+- Configure this key vault's name on the terraform file `./IaC-terraform/modules/security/variables.tf` variable `imported_keyvault`. also update the `imported_resource_group` with the resource group name where this Key Vault is located.
 
 ## App Registration / Enterprise Application for GitHub - Azure Access
 

@@ -9,7 +9,7 @@ resource "azurerm_static_web_app" "static-wa" {
     prevent_destroy = false
   }
   app_settings = {
-    VITE_BACKEND_API_URL="https://ekb.xom.cloud"
+    VITE_BACKEND_API_URL="https://www.edukb.site"
   }
   tags = var.shared_tags
 }
