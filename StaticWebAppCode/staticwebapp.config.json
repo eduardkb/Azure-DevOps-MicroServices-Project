@@ -1,0 +1,26 @@
+{
+    "routes": [
+        {
+            "route": "/",
+            "allowedRoles": [
+                "anonymous"
+            ]
+        },
+        {
+            "route": "/manifest.json",
+            "allowedRoles": [
+                "anonymous",
+                "authenticated"
+            ]
+        },
+        {
+            "route": "*",
+            "allowedRoles": [
+                "anonymous"
+            ]
+        }
+    ],
+    "navigationFallback": {
+        "rewrite": "/index.html"
+    }
+}

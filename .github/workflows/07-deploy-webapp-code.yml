@@ -1,0 +1,162 @@
+name: 07-deploy-webapp-code
+
+on:
+  workflow_dispatch: {}
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+        default: prod
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+jobs:
+  deploy-react-code:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Try to fetch latest "infra-outputs" artifact
+        id: fetch_artifact
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const repo = context.repo;
+            const artifacts = await github.rest.actions.listArtifactsForRepo({
+              owner: repo.owner,
+              repo: repo.repo,
+              per_page: 100
+            });
+
+            // Filter by name and non-expired
+            const matches = artifacts.data.artifacts
+              .filter(a => a.name === 'infra-outputs' && !a.expired)
+              .sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+
+            if (matches.length === 0) {
+              core.info('No infra-outputs artifact found.');
+              core.setOutput('found', 'false');
+              return;
+            }
+
+            const artifact = matches[0];
+            core.info(`Found artifact id=${artifact.id} created_at=${artifact.created_at}`);
+
+            // Download zip to workspace
+            const fs = require('fs');
+            const path = require('path');
+            const dest = path.join(process.cwd(), 'infra_outputs.zip');
+
+            const resp = await github.request(artifact.archive_download_url, {
+              owner: repo.owner,
+              repo: repo.repo,
+              headers: { 
+                // Ensure auth for redirect
+                authorization: `token ${process.env.GITHUB_TOKEN}`
+              }
+            });
+
+            fs.writeFileSync(dest, Buffer.from(resp.data));
+            core.setOutput('found', 'true');
+            core.setOutput('zipPath', dest);
+
+      - name: Extract artifact
+        if: steps.fetch_artifact.outputs.found == 'true'
+        run: |
+          mkdir -p tf_Artifact
+          unzip -o "${{ steps.fetch_artifact.outputs.zipPath }}" -d tf_Artifact
+          ls -la tf_Artifact
+
+      - name: Read previously saved infra_outputs.json
+        id: read_prev
+        if: steps.fetch_artifact.outputs.found == 'true' && hashFiles('tf_Artifact/infra_outputs.json') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -r '.' tf_Artifact/infra_outputs.json
+          # Export values to outputs for later steps
+          echo "prev_rg=$(jq -r '.resource_group_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_func=$(jq -r '.function_app_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_swa=$(jq -r '.static_web_app_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_kv=$(jq -r '.key_vault_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_appconf=$(jq -r '.app_config_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_cosmos=$(jq -r '.cosmosdb_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "api_url=$(jq -r '.api_url' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "web_key=$(jq -r '.web_key' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Print variables if existant
+        run: |
+          if [ "${{ steps.fetch_artifact.outputs.found }}" != "true" ]; then
+            echo "::error title=Missing previous artifact::No 'infra-outputs' artifact found in prior runs."
+            exit 1
+          else
+            echo "Previous infra artifact exists"
+            echo "RG: ${{ steps.read_prev.outputs.prev_rg }}"
+            echo "SWA: ${{ steps.read_prev.outputs.prev_swa }}"
+            echo "API_URL: ${{ steps.read_prev.outputs.api_url }}"
+            echo "WEB_KEY: ${{ steps.read_prev.outputs.web_key }}"
+            # Add your conditional logic here, e.g. set an env var or output flag
+          fi
+
+      - name: Inject Environment Variables
+        run: |
+          API_URL=${{ steps.read_prev.outputs.api_url }}
+          WEB_KEY=${{ steps.read_prev.outputs.web_key }}
+
+          # print injected variables
+          echo "api_url = $API_URL"
+          echo "web_key = $::add-mask::WEB_KEY"          
+          echo "DEBUG: web_key = $WEB_KEY"
+
+          # inject variabels to frontend
+          echo "VITE_BACKEND_API_URL=https://$API_URL" >> $GITHUB_ENV
+          echo "VITE_WEB_KEY=$WEB_KEY" >> $GITHUB_ENV
+          
+      - name: Install frontend dependencies
+        working-directory: StaticWebAppCode
+        run: |
+          if [ -f package-lock.json ] || [ -f npm-shrinkwrap.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Build frontend (Vite)
+        working-directory: StaticWebAppCode
+        run: npm run build
+
+      - name: Install SWA CLI
+        run: npm install -g @azure/static-web-apps-cli
+
+      - name: Deploy Static Web App (production)
+        run: |
+          swa deploy "./StaticWebAppCode/dist" \
+            --env production \
+            --app-name "${{ steps.read_prev.outputs.prev_swa }}" \
+            --resource-group "${{ steps.read_prev.outputs.prev_rg }}" \
+            --subscription-id "${{ secrets.AZURE_SUBSCRIPTION_ID }}"

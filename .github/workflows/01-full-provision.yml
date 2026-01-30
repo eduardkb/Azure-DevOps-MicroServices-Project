@@ -1,0 +1,53 @@
+name: 01-full-provision
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options: [dev, test, prod]
+        default: prod
+      image_tag:
+        description: "Backend image tag"
+        type: string
+        default: latest
+      build_number:
+        description: "Frontend build number"
+        type: string
+        required: false
+
+# Permissions that the caller grants to the called workflows when using `secrets: inherit`
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+# Optional but recommended to avoid overlapping runs per environment
+concurrency:
+  group: full-provision-${{ inputs.environment }}
+  cancel-in-progress: false
+
+jobs:
+  deploy-infra:
+    name: Provision Infra
+    uses: ./.github/workflows/05-provision-infra.yml
+    with:
+      environment: ${{ inputs.environment }}
+    secrets: inherit
+
+  deploy-function-code:
+    name: Deploy Function Code
+    needs: deploy-infra
+    uses: ./.github/workflows/06-deploy-function-code.yml
+    with:
+      environment: ${{ inputs.environment }}
+    secrets: inherit
+
+  deploy-react-code:
+    name: Deploy React App
+    needs: [deploy-infra, deploy-function-code] # or just needs: deploy-function-code
+    uses: ./.github/workflows/07-deploy-webapp-code.yml
+    with:
+      environment: ${{ inputs.environment }}      
+    secrets: inherit

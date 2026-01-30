@@ -1,0 +1,12 @@
+{
+    "bindings": [
+        {
+            "type": "serviceBusTrigger",
+            "direction": "in",
+            "name": "myQueueItem",
+            "queueName": "uploaddoc",
+            "connection": "AZURE_SERVICE_BUS_CONN_STRING",
+            "cardinality": "one"
+        }
+    ]
+}

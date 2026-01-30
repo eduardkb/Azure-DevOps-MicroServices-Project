@@ -1,0 +1,186 @@
+name: 20-destroy-infra
+
+on:
+  workflow_dispatch:
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+jobs:
+  terraform-destroy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.5 
+
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Set Terraform Azure Credentials
+        run: |
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+
+      - name: Try to fetch latest "infra-outputs" artifact
+        id: fetch_artifact
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const repo = context.repo;
+            const artifacts = await github.rest.actions.listArtifactsForRepo({
+              owner: repo.owner,
+              repo: repo.repo,
+              per_page: 100
+            });
+
+            // Filter by name and non-expired
+            const matches = artifacts.data.artifacts
+              .filter(a => a.name === 'infra-outputs' && !a.expired)
+              .sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+
+            if (matches.length === 0) {
+              core.info('No infra-outputs artifact found.');
+              core.setOutput('found', 'false');
+              return;
+            }
+
+            const artifact = matches[0];
+            core.info(`Found artifact id=${artifact.id} created_at=${artifact.created_at}`);
+
+            // Download zip to workspace
+            const fs = require('fs');
+            const path = require('path');
+            const dest = path.join(process.cwd(), 'infra_outputs.zip');
+
+            const resp = await github.request(artifact.archive_download_url, {
+              owner: repo.owner,
+              repo: repo.repo,
+              headers: { 
+                // Ensure auth for redirect
+                authorization: `token ${process.env.GITHUB_TOKEN}`
+              }
+            });
+
+            fs.writeFileSync(dest, Buffer.from(resp.data));
+            core.setOutput('found', 'true');
+            core.setOutput('zipPath', dest);
+
+      - name: Extract artifact
+        if: steps.fetch_artifact.outputs.found == 'true'
+        run: |
+          mkdir -p tf_Artifact
+          unzip -o "${{ steps.fetch_artifact.outputs.zipPath }}" -d tf_Artifact
+          ls -la tf_Artifact
+
+      - name: Read previously saved infra_outputs.json
+        id: read_prev
+        if: steps.fetch_artifact.outputs.found == 'true' && hashFiles('tf_Artifact/infra_outputs.json') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -r '.' tf_Artifact/infra_outputs.json
+          # Export values to outputs for later steps
+          echo "prev_rg=$(jq -r '.resource_group_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_func=$(jq -r '.function_app_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_swa=$(jq -r '.static_web_app_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_kv=$(jq -r '.key_vault_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_appconf=$(jq -r '.app_config_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_cosmos=$(jq -r '.cosmosdb_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Enable public access to kv and app config if artifacts exists
+        run: |
+          if [ "${{ steps.fetch_artifact.outputs.found }}" != "true" ]; then
+            echo "No previous infra artifact; proceeding with full init/provision."
+          else
+            echo "Previous infra artifact exists"
+            RG=${{ steps.read_prev.outputs.prev_rg }}
+            KV=${{ steps.read_prev.outputs.prev_kv }}
+            APPCONF=${{ steps.read_prev.outputs.prev_appconf }}
+            echo "RG: $RG"
+            echo "KV: $KV"
+            echo "APPCONF: $APPCONF"              
+            
+            # enable KV and APP CONFIG public access 
+            # --- Key Vault ---
+            if [[ -n "${KV}" && -n "${RG}" ]]; then
+              if az keyvault show \
+                    --name "${KV}" \
+                    --resource-group "${RG}" \
+                    --only-show-errors \
+                    --query "name" -o tsv >/dev/null 2>&1; then
+                echo "Key Vault '${KV}' exists. Enabling public network access..."
+                az keyvault update \
+                  --name "${KV}" \
+                  --resource-group "${RG}" \
+                  --public-network-access Enabled \
+                  --only-show-errors
+              else
+                echo "Key Vault '${KV}' not found in resource group '${RG}'. Skipping."
+              fi              
+            else
+              echo "Key Vault name or resource group is empty. Skipping Key Vault update."                    
+            fi
+            # --- App Configuration ---
+            if [[ -n "${KV}" && -n "${RG}" ]]; then
+              if az appconfig show \
+                    --name "${APPCONF}" \
+                    --resource-group "${RG}" \
+                    --only-show-errors \
+                    --query "name" -o tsv >/dev/null 2>&1; then
+                echo "App Configuration '${APPCONF}' exists. Enabling public network access..."
+                az appconfig update \
+                  --name "${APPCONF}" \
+                  --resource-group "${RG}" \
+                  --enable-public-network true \
+                  --only-show-errors
+              else
+                echo "App Configuration '${APPCONF}' not found in resource group '${RG}'. Skipping."
+              fi
+            else
+              echo "App Configuration name or resource group is empty. Skipping App Configuration update."                            
+            fi
+          fi
+
+      - name: Initialize Terraform
+        working-directory: IaC-Terraform/envs/prod/
+        run: |
+          set -euo pipefail
+          terraform init
+
+      - name: Staged Destroy (App Gateway first, then everything else)
+        working-directory: IaC-Terraform/envs/prod/
+        env:
+          TF_LOG: ERROR
+          TF_LOG_PATH: terraform-debug.log
+        run: |
+          set -euo pipefail
+
+          echo "Destroying Application Gateway..."
+          terraform destroy -auto-approve -target=azurerm_application_gateway.appgw
+
+          echo "Destroying AppGW related resources..."
+          terraform destroy -auto-approve -target=azurerm_public_ip.appgw_pip
+          terraform destroy -auto-approve -target=azurerm_dns_a_record.appgw_dns
+
+          echo "Destroying remaining resources..."
+          terraform destroy -auto-approve
+
+      - name: Upload Terraform Logs
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-logs
+          path: IaC-Terraform/envs/prod/terraform-debug.log

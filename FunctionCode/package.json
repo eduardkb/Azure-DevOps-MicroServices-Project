@@ -1,0 +1,28 @@
+{
+    "name": "health-funcapp",
+    "version": "1.0.0",
+    "type": "module",
+    "description": "Azure Function App for health app",
+    "scripts": {
+        "start": "func start",
+        "test": "echo \"No tests specified\" && exit 0"
+    },
+    "author": "EKB",
+    "license": "MIT",
+    "dependencies": {
+        "@azure/storage-blob": "^12.29.1",
+        "@azure/app-configuration": "^1.10.0",
+        "@azure/identity": "^4.13.0",
+        "@azure/keyvault-secrets": "^4.10.0",
+        "mongodb": "^7.0.0",
+        "jsonwebtoken": "^9.0.3",
+        "jwks-rsa": "^3.2.0",
+        "@azure/service-bus": "^7.9.5"
+    },
+    "devDependencies": {
+        "azure-functions-core-tools": "^4.5.0"
+    },
+    "engines": {
+        "node": ">=18"
+    }
+}

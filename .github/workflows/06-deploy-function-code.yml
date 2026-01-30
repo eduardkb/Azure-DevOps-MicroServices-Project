@@ -1,0 +1,200 @@
+name: 06-deploy-function-code
+
+on:
+  workflow_dispatch: {}
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+        default: prod
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+  # workflow_run:
+  #   workflows: ["01-deploy-terraform"]
+  #   types:
+  #     - completed
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+jobs:
+  deploy-function-code:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+
+      - name: Install Function dependencies
+        working-directory: FunctionCode
+        run: npm install
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Try to fetch latest "infra-outputs" artifact
+        id: fetch_artifact
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const repo = context.repo;
+            const artifacts = await github.rest.actions.listArtifactsForRepo({
+              owner: repo.owner,
+              repo: repo.repo,
+              per_page: 100
+            });
+
+            // Filter by name and non-expired
+            const matches = artifacts.data.artifacts
+              .filter(a => a.name === 'infra-outputs' && !a.expired)
+              .sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+
+            if (matches.length === 0) {
+              core.info('No infra-outputs artifact found.');
+              core.setOutput('found', 'false');
+              return;
+            }
+
+            const artifact = matches[0];
+            core.info(`Found artifact id=${artifact.id} created_at=${artifact.created_at}`);
+
+            // Download zip to workspace
+            const fs = require('fs');
+            const path = require('path');
+            const dest = path.join(process.cwd(), 'infra_outputs.zip');
+
+            const resp = await github.request(artifact.archive_download_url, {
+              owner: repo.owner,
+              repo: repo.repo,
+              headers: { 
+                // Ensure auth for redirect
+                authorization: `token ${process.env.GITHUB_TOKEN}`
+              }
+            });
+
+            fs.writeFileSync(dest, Buffer.from(resp.data));
+            core.setOutput('found', 'true');
+            core.setOutput('zipPath', dest);
+
+      - name: Extract artifact
+        if: steps.fetch_artifact.outputs.found == 'true'
+        run: |
+          mkdir -p tf_Artifact
+          unzip -o "${{ steps.fetch_artifact.outputs.zipPath }}" -d tf_Artifact
+          ls -la tf_Artifact
+
+      - name: Read previously saved infra_outputs.json
+        id: read_prev
+        if: steps.fetch_artifact.outputs.found == 'true' && hashFiles('tf_Artifact/infra_outputs.json') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -r '.' tf_Artifact/infra_outputs.json
+          # Export values to outputs for later steps
+          echo "prev_rg=$(jq -r '.resource_group_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_func=$(jq -r '.function_app_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_swa=$(jq -r '.static_web_app_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_kv=$(jq -r '.key_vault_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_appconf=$(jq -r '.app_config_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_cosmos=$(jq -r '.cosmosdb_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Print variables if existant
+        run: |
+          if [ "${{ steps.fetch_artifact.outputs.found }}" != "true" ]; then
+            echo "::error title=Missing previous artifact::No 'infra-outputs' artifact found in prior runs."
+            exit 1
+          else
+            echo "Previous infra artifact exists"
+            echo "RG: ${{ steps.read_prev.outputs.prev_rg }}"
+            echo "FA: ${{ steps.read_prev.outputs.prev_func }}"
+            # Add your conditional logic here, e.g. set an env var or output flag
+          fi
+
+      # --- ENABLE public network access BEFORE deploy ---
+      - name: Enable public network access (preferred CLI)
+        id: enable-pna-cli
+        run: |
+          set -e
+          APP="${{ steps.read_prev.outputs.prev_func }}"
+          RG="${{ steps.read_prev.outputs.prev_rg }}"
+          echo "Enabling publicNetworkAccess for function app: $APP (RG: $RG)"
+          az resource update \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --resource-type "Microsoft.Web/sites" \
+            --set properties.publicNetworkAccess=Enabled
+        continue-on-error: true
+
+      - name: Enable public network access (fallback via REST)
+        if: ${{ steps.enable-pna-cli.outcome == 'failure' }}
+        run: |
+          set -e
+          APP="${{ steps.read_prev.outputs.prev_func }}"
+          RG="${{ steps.read_prev.outputs.prev_rg }}"
+          SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          echo "CLI flag not supported; falling back to az rest. App: $APP (RG: $RG) (SUB: $SUB)"
+          az rest \
+            --method PATCH \
+            --uri "https://management.azure.com/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Web/sites/$APP?api-version=2023-12-01" \
+            --body '{"properties":{"publicNetworkAccess":"Enabled"}}'
+        shell: bash
+
+      - name: Wait for setting to propagate
+        run: |
+          echo "Waiting ~20s for publicNetworkAccess to propagate..."
+          sleep 20
+
+      # DEPLOY CODE TO FUNCTION APP
+      - name: Deploy to Azure Function App
+        uses: azure/functions-action@v1
+        with:
+          app-name: ${{ steps.read_prev.outputs.prev_func }}
+          package: FunctionCode
+          remote-build: true
+
+      # --- DISABLE public network access AFTER deploy ---
+      - name: Disable public network access (preferred CLI)
+        if: ${{ always() }}
+        id: disable-pna-cli
+        run: |
+          set -e
+          APP="${{ steps.read_prev.outputs.prev_func }}"
+          RG="${{ steps.read_prev.outputs.prev_rg }}"
+          echo "Disabling publicNetworkAccess for function app: $APP (RG: $RG)"
+          az resource update \
+            --resource-group "$RG" \
+            --name "$APP" \
+            --resource-type "Microsoft.Web/sites" \
+            --set properties.publicNetworkAccess=Disabled
+        continue-on-error: true
+
+      - name: Disable public network access (fallback via REST)
+        if: ${{ always() && steps.disable-pna-cli.outcome == 'failure' }}
+        run: |
+          set -e
+          APP="${{ steps.read_prev.outputs.prev_func }}"
+          RG="${{ steps.read_prev.outputs.prev_rg }}"
+          SUB="${{ secrets.AZURE_SUBSCRIPTION_ID }}"
+          echo "CLI flag not supported; falling back to az rest. App: $APP (RG: $RG) (SUB: $SUB)"
+          az rest \
+            --method PATCH \
+            --uri "https://management.azure.com/subscriptions/$SUB/resourceGroups/$RG/providers/Microsoft.Web/sites/$APP?api-version=2023-12-01" \
+            --body '{"properties":{"publicNetworkAccess":"Disabled"}}'
+        shell: bash

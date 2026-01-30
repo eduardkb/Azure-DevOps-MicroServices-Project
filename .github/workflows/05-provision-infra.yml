@@ -1,0 +1,335 @@
+name: 05-provision-infra
+
+
+on:
+  workflow_dispatch: {}
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+        default: prod
+    secrets:
+      AZURE_CLIENT_ID:
+        required: true
+      AZURE_TENANT_ID:
+        required: true
+      AZURE_SUBSCRIPTION_ID:
+        required: true
+  # push:
+  #   branches:
+  #     - main
+
+permissions:
+  id-token: write
+  contents: read
+  actions: read
+
+jobs:
+  deploy-infra:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.6.0
+          terraform_wrapper: false
+
+      - name: Azure Login (OIDC)
+        uses: azure/login@v2
+        with:
+          client-id: ${{ secrets.AZURE_CLIENT_ID }}
+          tenant-id: ${{ secrets.AZURE_TENANT_ID }}
+          subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Export Terraform Azure creds (OIDC)
+        run: |
+          echo "ARM_CLIENT_ID=${{ secrets.AZURE_CLIENT_ID }}" >> $GITHUB_ENV
+          echo "ARM_TENANT_ID=${{ secrets.AZURE_TENANT_ID }}" >> $GITHUB_ENV
+          echo "ARM_SUBSCRIPTION_ID=${{ secrets.AZURE_SUBSCRIPTION_ID }}" >> $GITHUB_ENV
+          echo "ARM_USE_OIDC=true" >> $GITHUB_ENV
+
+      - name: Try to fetch latest "infra-outputs" artifact
+        id: fetch_artifact
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const repo = context.repo;
+            const artifacts = await github.rest.actions.listArtifactsForRepo({
+              owner: repo.owner,
+              repo: repo.repo,
+              per_page: 100
+            });
+
+            // Filter by name and non-expired
+            const matches = artifacts.data.artifacts
+              .filter(a => a.name === 'infra-outputs' && !a.expired)
+              .sort((a,b) => new Date(b.created_at) - new Date(a.created_at));
+
+            if (matches.length === 0) {
+              core.info('No infra-outputs artifact found.');
+              core.setOutput('found', 'false');
+              return;
+            }
+
+            const artifact = matches[0];
+            core.info(`Found artifact id=${artifact.id} created_at=${artifact.created_at}`);
+
+            // Download zip to workspace
+            const fs = require('fs');
+            const path = require('path');
+            const dest = path.join(process.cwd(), 'infra_outputs.zip');
+
+            const resp = await github.request(artifact.archive_download_url, {
+              owner: repo.owner,
+              repo: repo.repo,
+              headers: { 
+                // Ensure auth for redirect
+                authorization: `token ${process.env.GITHUB_TOKEN}`
+              }
+            });
+
+            fs.writeFileSync(dest, Buffer.from(resp.data));
+            core.setOutput('found', 'true');
+            core.setOutput('zipPath', dest);
+
+      - name: Extract artifact
+        if: steps.fetch_artifact.outputs.found == 'true'
+        run: |
+          mkdir -p tf_Artifact
+          unzip -o "${{ steps.fetch_artifact.outputs.zipPath }}" -d tf_Artifact
+          ls -la tf_Artifact
+
+      - name: Read previously saved infra_outputs.json
+        id: read_prev
+        if: steps.fetch_artifact.outputs.found == 'true' && hashFiles('tf_Artifact/infra_outputs.json') != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          jq -r '.' tf_Artifact/infra_outputs.json
+          # Export values to outputs for later steps
+          echo "prev_rg=$(jq -r '.resource_group_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_func=$(jq -r '.function_app_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_swa=$(jq -r '.static_web_app_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_kv=$(jq -r '.key_vault_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_appconf=$(jq -r '.app_config_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+          echo "prev_cosmos=$(jq -r '.cosmosdb_name' tf_Artifact/infra_outputs.json)" >> "$GITHUB_OUTPUT"
+
+      - name: Enable public access to kv and app config if artifacts exists
+        run: |
+          if [ "${{ steps.fetch_artifact.outputs.found }}" != "true" ]; then
+            echo "No previous infra artifact; proceeding with full init/provision."
+          else
+            echo "Previous infra artifact exists"
+            RG=${{ steps.read_prev.outputs.prev_rg }}
+            KV=${{ steps.read_prev.outputs.prev_kv }}
+            APPCONF=${{ steps.read_prev.outputs.prev_appconf }}
+            echo "RG: $RG"
+            echo "KV: $KV"
+            echo "APPCONF: $APPCONF"
+            
+            # enable KV and APP CONFIG public access 
+            # --- Key Vault ---
+            if [[ -n "${KV}" && -n "${RG}" ]]; then
+              if az keyvault show \
+                    --name "${KV}" \
+                    --resource-group "${RG}" \
+                    --only-show-errors \
+                    --query "name" -o tsv >/dev/null 2>&1; then
+                echo "Key Vault '${KV}' exists. Enabling public network access..."
+                az keyvault update \
+                  --name "${KV}" \
+                  --resource-group "${RG}" \
+                  --public-network-access Enabled \
+                  --only-show-errors
+              else
+                echo "Key Vault '${KV}' not found in resource group '${RG}'. Skipping."
+              fi              
+            else
+              echo "Key Vault name or resource group is empty. Skipping Key Vault update."                    
+            fi
+            # --- App Configuration ---
+            if [[ -n "${APPCONF}" && -n "${RG}" ]]; then
+              if az appconfig show \
+                    --name "${APPCONF}" \
+                    --resource-group "${RG}" \
+                    --only-show-errors \
+                    --query "name" -o tsv >/dev/null 2>&1; then
+                echo "App Configuration '${APPCONF}' exists. Enabling public network access..."
+                az appconfig update \
+                  --name "${APPCONF}" \
+                  --resource-group "${RG}" \
+                  --enable-public-network true \
+                  --only-show-errors
+              else
+                echo "App Configuration '${APPCONF}' not found in resource group '${RG}'. Skipping."
+              fi
+            else
+              echo "App Configuration name or resource group is empty. Skipping App Configuration update."                            
+            fi
+          fi
+
+      - name: Terraform Init
+        working-directory: IaC-Terraform/envs/${{ inputs.environment }}/
+        run: terraform init
+
+      - name: Terraform Plan
+        working-directory: IaC-Terraform/envs/${{ inputs.environment }}/
+        run: terraform plan -out=tfplan
+
+      - name: Terraform Apply
+        working-directory: IaC-Terraform/envs/${{ inputs.environment }}/
+        run: terraform apply -auto-approve tfplan
+      
+      - name: Collect and save outputs (JSON + artifact)
+        id: getinfra
+        working-directory: IaC-Terraform/envs/${{ inputs.environment }}/
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Capture outputs
+          RG_NAME="$(terraform output -raw resource_group_name | tr -d '\r')"
+          FUNC_NAME="$(terraform output -raw function_app_name | tr -d '\r')"
+          SWA_NAME="$(terraform output -raw static_web_app_name | tr -d '\r')"
+          KV_NAME="$(terraform output -raw key_vault_name | tr -d '\r')"
+          APP_CONF_NAME="$(terraform output -raw app_config_name | tr -d '\r')"
+          COSMOSDB_NAME="$(terraform output -raw cosmosdb_name | tr -d '\r')"
+          API_URL="$(terraform output -raw api_url | tr -d '\r')"
+          WEB_KEY="$(terraform output -raw web_key | tr -d '\r')"
+
+          # Expose as step outputs (still available to this workflow run)
+          {
+            echo "resource_group_name=$RG_NAME"
+            echo "function_app_name=$FUNC_NAME"
+            echo "static_web_app_name=$SWA_NAME"
+            echo "key_vault_name=$KV_NAME"
+            echo "app_config_name=$APP_CONF_NAME"
+            echo "cosmosdb_name=$COSMOSDB_NAME"
+            echo "api_url=$API_URL"
+            echo "web_key=$WEB_KEY"
+          } >> "$GITHUB_OUTPUT"
+
+          # Create JSON file with outputs
+          JSON_PATH="infra_outputs.json"
+          cat > "$JSON_PATH" <<'JSON'
+          {
+            "resource_group_name": "__RG_NAME__",
+            "function_app_name": "__FUNC_NAME__",
+            "static_web_app_name": "__SWA_NAME__",
+            "key_vault_name": "__KV_NAME__",
+            "app_config_name": "__APP_CONF_NAME__",
+            "cosmosdb_name": "__COSMOSDB_NAME__",
+            "api_url": "__API_URL__",
+            "web_key": "__WEB_KEY__"
+          }
+          JSON
+
+          # Replace placeholders safely (resource names are typically simple)          
+          jq -n \
+            --arg rg "$RG_NAME" \
+            --arg func "$FUNC_NAME" \
+            --arg swa "$SWA_NAME" \
+            --arg kv "$KV_NAME" \
+            --arg appc "$APP_CONF_NAME" \
+            --arg cosmos "$COSMOSDB_NAME" \
+            --arg api "$API_URL" \
+            --arg webkey "$WEB_KEY" \
+            '{
+              resource_group_name: $rg,
+              function_app_name: $func,
+              static_web_app_name: $swa,
+              key_vault_name: $kv,
+              app_config_name: $appc,
+              cosmosdb_name: $cosmos,
+              api_url: $api,
+              web_key: $webkey
+            }' > infra_outputs.json
+
+          # Copy artifact to root folder
+          cp infra_outputs.json "$GITHUB_WORKSPACE/infra_outputs.json"
+
+          # Show the JSON for debugging
+          echo "==== infra_outputs.json ===="
+          cat "$JSON_PATH"
+          echo "============================"
+
+      - name: Upload infra outputs artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: infra-outputs
+          path: infra_outputs.json          
+
+      - name: Disable public access for provisioned resources
+        shell: bash
+        run: |
+          set -euo pipefail
+          
+          RG="${{ steps.getinfra.outputs.resource_group_name }}"
+          FUNC="${{ steps.getinfra.outputs.function_app_name }}"
+          SWA="${{ steps.getinfra.outputs.static_web_app_name }}"
+          KV="${{ steps.getinfra.outputs.key_vault_name }}"
+          AC="${{ steps.getinfra.outputs.app_config_name }}"
+          COSMOS="${{ steps.getinfra.outputs.cosmosdb_name }}"
+
+
+          echo "Resource Group:          ${RG}"
+          echo "Function App:            ${FUNC}"
+          echo "Static Web App:          ${SWA}"
+          echo "Key Vault:               ${KV}"
+          echo "App Configuration:       ${AC}"
+          echo "Cosmos DB Account:       ${COSMOS}"
+
+          # Key Vault: disable public network access
+          # Requires Azure CLI >= 2.45:
+          if [[ -n "${KV:-}" ]]; then
+            az keyvault update \
+              --name "${KV}" \
+              --resource-group "${RG}" \
+              --public-network-access Disabled
+          fi
+
+          # App Configuration: disable public network access
+          if [[ -n "${AC:-}" ]]; then
+            az appconfig update \
+              --name "${AC}" \
+              --resource-group "${RG}" \
+              --enable-public-network false
+          fi
+
+          # Cosmos DB (global account): disable public network access          
+          if [[ -n "${COSMOS:-}" ]]; then
+            az cosmosdb update \
+              --name "${COSMOS}" \
+              --resource-group "${RG}" \
+              --public-network-access "DISABLED"
+          fi
+
+          # Function App (App Service): disable public network access
+          if [[ -n "${FUNC:-}" ]]; then
+            az resource update \
+              --resource-group "${RG}"  \
+              --name "${FUNC}" \
+              --resource-type Microsoft.Web/sites \
+              --set properties.publicNetworkAccess=Disabled
+          fi
+
+      - name: verify saved variables
+        shell: bash
+        run: |        
+          curl -sS \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/repos/${{ github.repository }}/actions/variables"
+    outputs:
+      resource_group_name: ${{ steps.getinfra.outputs.resource_group_name }}
+      function_app_name: ${{ steps.getinfra.outputs.function_app_name }}
+      static_web_app_name: ${{ steps.getinfra.outputs.static_web_app_name }}
+      key_vault_name: ${{ steps.getinfra.outputs.key_vault_name }}
+      app_config_name: ${{ steps.getinfra.outputs.app_config_name }}
+      cosmosdb_name: ${{ steps.getinfra.outputs.cosmosdb_name }}
+      api_url: ${{ steps.getinfra.outputs.api_url }}
+      web_key: ${{ steps.getinfra.outputs.web_key }}
