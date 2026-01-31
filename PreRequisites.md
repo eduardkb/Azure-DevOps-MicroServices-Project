@@ -11,6 +11,7 @@
   - Microsoft.DocumentDB
   - Microsoft.ServiceBus
   - microsoft.insights
+  - microsoft.operationalinsights
 
 
 ## Storage Account
@@ -52,6 +53,8 @@
   - This is needed because some resources permissions will need to be added (Example: Managed identity access for Database, Function and Key Vault)
 - Assign Role "Contributor" to this EA on the resource group where the imported resources are.
   - This is needed becuause git actions needs to be able to read dns and keyvault resource
+- Assign Role "Key Vault Secrets User" to this EA on resource shared keyvault
+  - This is needed because the EA needs to read the secrets.
 - Configure "Federated Credentials" on App Reg's Certificates & Secrets screen
   - This is needed for all communications between GitHub Actions and Azure. (Example: to create resources with terraform and to deploy code to function app)
   - Configuration:
