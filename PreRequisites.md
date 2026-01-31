@@ -37,6 +37,8 @@
   - This is needed to create resources on the resource group
 - Assign Role "User Access Administrator" to this EA on the Resource Group where the Resources of this project will be deployed.
   - This is needed because some resources permissions will need to be added (Example: Managed identity access for Database, Function and Key Vault)
+- Assign Role "Key Vault Certificates User" to this EA on the existant key vault above.
+  - This is needed so that the app gateway can read the SSL certificate from keyvalut
 - Configure "Federated Credentials" on App Reg's Certificates & Secrets screen
   - This is needed for all communications between GitHub Actions and Azure. (Example: to create resources with terraform and to deploy code to function app)
   - Configuration:
