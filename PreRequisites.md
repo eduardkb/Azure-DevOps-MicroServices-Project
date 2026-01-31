@@ -7,6 +7,11 @@
 - Resource group that will be imported to use pre-existant resources
   - Modify variable `imported_resource_group` on path `./IaC-terraform/modules/ingress/variables.tf`.
   - Currently is configured as: `SharedResources` 
+- Configure Resource providers if new subscription
+  - Microsoft.DocumentDB
+  - Microsoft.ServiceBus
+  - microsoft.insights
+
 
 ## Storage Account
 
@@ -43,10 +48,8 @@
   - This is needed so GitHub Actions can read keys for the storage account
 - Assign Role "Contributor" to this EA on the Resource Group where the Resources of this project will be deployed.
   - This is needed to create resources on the resource group
-- Assign Role "User Access Administrator" to this EA on the Resource Group where the Resources of this project will be deployed.
+- Assign Role "User Access Administrator" to this EA on both resource groups (deployed resources RG and imported RG).
   - This is needed because some resources permissions will need to be added (Example: Managed identity access for Database, Function and Key Vault)
-- Assign Role "Key Vault Certificates User" to this EA on the existant key vault above.
-  - This is needed so that the app gateway can read the SSL certificate from keyvalut
 - Assign Role "Contributor" to this EA on the resource group where the imported resources are.
   - This is needed becuause git actions needs to be able to read dns and keyvault resource
 - Configure "Federated Credentials" on App Reg's Certificates & Secrets screen
