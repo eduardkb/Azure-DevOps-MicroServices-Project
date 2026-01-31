@@ -24,6 +24,7 @@ provider "azurerm" {
       recover_soft_deleted         = false
     }
   }
+  resource_provider_registrations = "none"
   
   // Uncomment lines below to do local deploy
   # use_cli = true

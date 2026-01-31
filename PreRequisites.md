@@ -31,6 +31,8 @@
 - Create a App Registration and Enterprise Application
 - Assign Role "Storage Blob Data Contributor" to this EA on the Storge Account above
   - This is needed so GitHub Actions can read and write to the terraform state file
+- Assign Role "Storage Account Key Operator Service Role" to this EA on the Storge Account above
+  - This is needed so GitHub Actions can read keys for the storage account
 - Assign Role "Contributor" to this EA on the Resource Group where the Resources of this project will be deployed.
   - This is needed to create resources on the resource group
 - Assign Role "User Access Administrator" to this EA on the Resource Group where the Resources of this project will be deployed.
