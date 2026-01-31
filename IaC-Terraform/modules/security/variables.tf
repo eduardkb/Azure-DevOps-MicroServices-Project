@@ -62,9 +62,9 @@ variable "AppReg_WebClientID" {
 }
 
 # COMPUTE VARIABLES
-variable "compute_function_identity" {
-  type        = string
-}
+#variable "compute_function_identity" {
+#  type        = string
+#}
 
 # DATA VARIABLES
 variable "storage_id" {

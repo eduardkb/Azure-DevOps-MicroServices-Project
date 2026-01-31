@@ -39,6 +39,8 @@
   - This is needed because some resources permissions will need to be added (Example: Managed identity access for Database, Function and Key Vault)
 - Assign Role "Key Vault Certificates User" to this EA on the existant key vault above.
   - This is needed so that the app gateway can read the SSL certificate from keyvalut
+- Assign Role "Contributor" to this EA on the imported resources resource group.
+  - This is needed becuause git actions needs to be able to read dns and keyvault resource
 - Configure "Federated Credentials" on App Reg's Certificates & Secrets screen
   - This is needed for all communications between GitHub Actions and Azure. (Example: to create resources with terraform and to deploy code to function app)
   - Configuration:

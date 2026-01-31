@@ -32,9 +32,9 @@ resource "azurerm_function_app_flex_consumption" "function" {
   public_network_access_enabled = false
   virtual_network_subnet_id = var.network_integ_subnet_id  
 
-  identity {
-    type         = "SystemAssigned" 
-  }
+#  identity {
+#    type         = "SystemAssigned" 
+#  }
   
   app_settings = {
     "FUNCTIONS_EXTENSION_VERSION"           = "~4"
