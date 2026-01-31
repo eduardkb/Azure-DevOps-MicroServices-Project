@@ -28,7 +28,7 @@ variable "shared_tags" {
 variable "imported_resource_group" {
   description = "RG to import resources"
   type        = string
-  default     = "rg-Eduard"
+  default     = "SharedResources"
 }
 
 variable "imported_dns_zone_name" {

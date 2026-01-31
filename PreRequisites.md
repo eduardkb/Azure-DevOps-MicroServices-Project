@@ -1,5 +1,13 @@
 # Mandataory Configuration Before Deployment
 
+## Configure Existing Resource Groups
+- Resource group where resources will be deployed
+  - Modify variable `deploy_rg` on path `./IaC-terraform/global/variables.tf`.
+  - Currently is configured as: `microProject` 
+- Resource group that will be imported to use pre-existant resources
+  - Modify variable `imported_resource_group` on path `./IaC-terraform/modules/ingress/variables.tf`.
+  - Currently is configured as: `SharedResources` 
+
 ## Storage Account
 
 - A existing storage account with a container is needed to store terraform state
@@ -25,7 +33,7 @@
 - Certificate Password
   - you don't need to create the password as a secret on keyvault. app gateway can read the certificate fom kv withou passing the password.
 - Configure this key vault's name on the terraform file `./IaC-terraform/modules/security/variables.tf` variable `imported_keyvault`. also update the `imported_resource_group` with the resource group name where this Key Vault is located.
-  
+
 ## App Registration / Enterprise Application for GitHub - Azure Access
 
 - Create a App Registration and Enterprise Application

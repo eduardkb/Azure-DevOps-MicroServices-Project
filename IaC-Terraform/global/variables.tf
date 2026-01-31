@@ -13,7 +13,7 @@ variable "location" {
 variable "deploy_rg" {
   description = "Resource group to deploy resources into"
   type        = string
-  default     = "rg-EduardIaC"
+  default     = "microProject"
 }
 
 variable "shared_tags" {

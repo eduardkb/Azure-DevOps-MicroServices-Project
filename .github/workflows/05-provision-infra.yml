@@ -37,11 +37,6 @@ jobs:
         with:
           terraform_version: 1.6.0
           terraform_wrapper: false
-      
-      - name: Azure Logout
-        run: |
-          az logout || true
-          az account clear || true
 
       - name: Azure Login (OIDC)
         uses: azure/login@v2
