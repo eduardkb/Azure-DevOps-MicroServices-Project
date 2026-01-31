@@ -21,6 +21,7 @@ data "azurerm_key_vault" "importedKv" {
 data "azurerm_key_vault_secret" "appGwCert" {
   name         = "appGateway-sslPfxCert"
   key_vault_id = data.azurerm_key_vault.importedKv.id
+  depends_on = [ azurerm_role_assignment.app_gateway_secret_reader ]
 }
 
 // CREATE SECRETS ON NEW KEY VAULT
