@@ -12,6 +12,7 @@
   - Microsoft.ServiceBus
   - microsoft.insights
   - microsoft.operationalinsights
+  - Microsoft.App
 
 
 ## Storage Account

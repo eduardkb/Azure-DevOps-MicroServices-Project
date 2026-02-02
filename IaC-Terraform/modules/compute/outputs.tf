@@ -14,9 +14,9 @@ output "compute_static-fa_host-name" {
   value       = azurerm_function_app_flex_consumption.function.default_hostname
 }
 
-#output "compute_function_identity" {
-#  value       = azurerm_function_app_flex_consumption.function.identity[0].principal_id
-#}
+output "compute_function_identity" {
+  value       = azurerm_function_app_flex_consumption.function.identity[0].principal_id
+}
 
 output "compute_static-wa_name" {
   value       = azurerm_static_web_app.static-wa.name 

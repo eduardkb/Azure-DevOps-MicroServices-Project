@@ -95,7 +95,7 @@ module "security" {
   client_config_object_id   = module.global.client_config_object_id
   random_web_key            = module.global.random_web_key
 
-  #compute_function_identity = module.compute.compute_function_identity
+  compute_function_identity = module.compute.compute_function_identity
   storage_id                = module.data.storage_id
   storage_servicebus_id     = module.data.storage_servicebus_id  
   db_cosmosdb_conn_string   = module.data.db_cosmosdb_conn_string
