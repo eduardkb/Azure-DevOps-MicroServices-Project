@@ -2,7 +2,17 @@ name: 05-provision-infra
 
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+        default: prod
+        required: true
   workflow_call:
     inputs:
       environment:

@@ -109,7 +109,7 @@ resource "azurerm_application_gateway" "appgw" {
     protocol            = "Https"
     path                = "/"
     port                = 443
-    interval            = 3600 # DEFAULT INTERVAL FOR HEALTHCHECK = 30
+    interval            = 30 # DEFAULT INTERVAL FOR HEALTHCHECK = 30
     timeout             = 30
     unhealthy_threshold = 3
     pick_host_name_from_backend_http_settings = true
@@ -124,7 +124,7 @@ resource "azurerm_application_gateway" "appgw" {
     protocol            = "Https"
     path                = "/api/healthcheck"
     port                = 443
-    interval            = 3600 # DEFAULT INTERVAL FOR HEALTHCHECK = 30
+    interval            = 30 # DEFAULT INTERVAL FOR HEALTHCHECK = 30
     timeout             = 30
     unhealthy_threshold = 3
     pick_host_name_from_backend_http_settings = true
