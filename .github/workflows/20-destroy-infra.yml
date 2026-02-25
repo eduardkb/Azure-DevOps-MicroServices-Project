@@ -154,30 +154,66 @@ jobs:
               echo "App Configuration name or resource group is empty. Skipping App Configuration update."                            
             fi
           fi
+        
 
-      - name: Initialize Terraform
-        working-directory: IaC-Terraform/envs/prod/
-        run: |
-          set -euo pipefail
-          terraform init
-
-      - name: Staged Destroy (App Gateway first, then everything else)
+      - name: Staged Destroy (AppGW → NSGs → Everything)
         working-directory: IaC-Terraform/envs/prod/
         env:
           TF_LOG: ERROR
           TF_LOG_PATH: terraform-debug.log
+        shell: bash
         run: |
           set -euo pipefail
 
-          echo "Destroying Application Gateway..."
+          RG="${{ steps.read_prev.outputs.prev_rg }}"
+
+          echo "============================================"
+          echo "Step 1: Destroying Application Gateway..."
+          echo "============================================"
+
           terraform destroy -auto-approve -target=azurerm_application_gateway.appgw
 
-          echo "Destroying AppGW related resources..."
-          terraform destroy -auto-approve -target=azurerm_public_ip.appgw_pip
-          terraform destroy -auto-approve -target=azurerm_dns_a_record.appgw_dns
+          echo "Checking if Application Gateway still exists..."
 
-          echo "Destroying remaining resources..."
+          APPGW_ID=$(az network application-gateway list \
+            --resource-group "$RG" \
+            --query "[0].id" -o tsv 2>/dev/null || true)
+
+          if [[ -n "${APPGW_ID:-}" ]]; then
+            echo "Application Gateway still exists."
+            echo "Waiting until it is fully deleted..."
+
+            az resource wait \
+              --ids "$APPGW_ID" \
+              --deleted \
+              --interval 15 \
+              --timeout 900
+
+            echo "Application Gateway successfully deleted."
+          else
+            echo "Application Gateway not found. Continuing..."
+          fi
+
+
+          echo "============================================"
+          echo "Step 2: Destroying NSGs..."
+          echo "============================================"
+
+          terraform state list | grep azurerm_network_security_group | while read r; do
+            echo "Destroying $r"
+            terraform destroy -auto-approve -target="$r"
+          done
+
+          echo "NSGs destroyed."
+
+
+          echo "============================================"
+          echo "Step 3: Destroying remaining resources..."
+          echo "============================================"
+
           terraform destroy -auto-approve
+
+          echo "Full destroy completed successfully."
 
       - name: Upload Terraform Logs
         uses: actions/upload-artifact@v4
