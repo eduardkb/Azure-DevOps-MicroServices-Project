@@ -2,6 +2,16 @@ name: 20-destroy-infra
 
 on:
   workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        type: choice
+        options:
+          - dev
+          - test
+          - prod
+        default: prod
+        required: true
 
 permissions:
   id-token: write
@@ -155,6 +165,9 @@ jobs:
             fi
           fi
         
+      - name: Terraform Init
+        working-directory: IaC-Terraform/envs/${{ github.event.inputs.environment }}
+        run: terraform init -reconfigure
 
       - name: Staged Destroy (AppGW → NSGs → Everything)
         working-directory: IaC-Terraform/envs/prod/
