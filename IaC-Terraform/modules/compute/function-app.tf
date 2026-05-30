@@ -26,7 +26,7 @@ resource "azurerm_function_app_flex_consumption" "function" {
   storage_authentication_type = "StorageAccountConnectionString"
   storage_access_key          = var.storage_access_key
   runtime_name                = "node"
-  runtime_version             = "20"
+  runtime_version             = "22"
   maximum_instance_count      = 50
   instance_memory_in_mb       = 2048
   public_network_access_enabled = false
